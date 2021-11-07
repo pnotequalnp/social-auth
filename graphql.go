@@ -23,18 +23,18 @@ var (
 
 type getResponse struct {
 	User []struct {
-		Id string
+		Id       string
 		Password string
 	}
 }
 
-func InitGraphQL(url string, token string) {
+func InitGraphQL(url string) {
 	client = graphql.NewClient(url)
-	getHash.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 }
 
-func FetchHash(ctx context.Context, email string) (string, string, error) {
+func FetchHash(ctx context.Context, email string, token string) (string, string, error) {
 	getHash.Var("email", email)
+	getHash.Header.Set("Cookie", fmt.Sprintf("auth=%s", token))
 
 	var res getResponse
 	if err := client.Run(ctx, getHash, &res); err != nil {

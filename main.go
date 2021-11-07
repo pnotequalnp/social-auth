@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -26,21 +28,27 @@ var (
 		StatusCode: http.StatusInternalServerError,
 		Body:       http.StatusText(http.StatusInternalServerError),
 	}
+
+	token    string
+	tokenExp time.Time
+	exp      time.Duration
+	domain   string
 )
 
-func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	type resType struct {
-		Email string
+func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	type requestBody struct {
+		Email    string
 		Password string
 	}
 
-	var res resType
-	err := json.Unmarshal([]byte(req.Body), &res)
+	var req requestBody
+	err := json.Unmarshal([]byte(request.Body), &req)
 	if err != nil {
 		return err400, nil
 	}
 
-	id, encoded, err := FetchHash(ctx, res.Email)
+	ensureToken()
+	id, encoded, err := FetchHash(ctx, req.Email, token)
 	if err != nil {
 		switch err {
 		case ErrNotFound:
@@ -52,7 +60,7 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 	}
 
 	// TODO: ensure memory is not more than available
-	valid, err := ValidateEncodedHash([]byte(res.Password), encoded)
+	valid, err := ValidateEncodedHash([]byte(req.Password), encoded)
 	if err != nil {
 		log.Println("ERROR: Hash validation failed", err)
 		return err500, nil
@@ -61,28 +69,59 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 		return err401, nil
 	}
 
+	userExp := time.Now().Add(exp)
+
 	// TODO: fetch roles instead of giving admin all the time
-	token, err := GenJWT(id, []string{"admin"})
+	userToken, err := GenJWT(id, []string{"admin"}, userExp)
 	if err != nil {
 		log.Println("ERROR: JWT creation failed", err)
 		return err500, nil
 	}
 
+	type response struct {
+		Id string `json:"id"`
+	}
+
+	res, _ := json.Marshal(response{id})
+
 	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusOK,
-		Body:       token,
+		Body:       string(res),
+		Headers: map[string]string{
+			"Set-Cookie": fmt.Sprintf(
+				"auth=%s; Domain=%s; Secure; HttpOnly; SameSite=Lax; Expires=%s GMT",
+				userToken, domain, userExp.Format("Mon, 02 Jan 2006 15:04:05")),
+		},
 	}, nil
 }
 
 func main() {
-	token, err := InitJWT([]byte(os.Getenv("JWT_SECRET")), os.Getenv("JWT_ISSUER"))
+	d, err := time.ParseDuration(os.Getenv("JWT_DURATION"))
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("FATAL: Could not parse JWT duration", err)
 	}
+	exp = d
 
-	InitGraphQL(os.Getenv("HASURA_ENDPOINT"), token)
+	domain = os.Getenv("AUTH_DOMAIN")
+
+	InitJWT([]byte(os.Getenv("JWT_SECRET")), os.Getenv("JWT_ISSUER"))
+
+	InitGraphQL(os.Getenv("GRAPHQL_ENDPOINT"))
 
 	log.Println("INFO: Successfully initialized")
 
 	lambda.Start(handler)
+}
+
+func ensureToken() string {
+	if tokenExp.Before(time.Now().Add(6e10)) {
+		tokenExp = time.Now().Add(3e11)
+		tok, err := GenJWT("00000000-0000-0000-0000-000000000000", []string{"auth"}, tokenExp)
+		if err != nil {
+			log.Fatal("FATAL: Auth token creation failed", err)
+		}
+		token = tok
+	}
+
+	return token
 }
