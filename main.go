@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-lambda-go/lambdacontext"
 )
 
 var (
@@ -59,8 +60,18 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 		}
 	}
 
-	// TODO: ensure memory is not more than available
-	valid, err := ValidateEncodedHash([]byte(req.Password), encoded)
+	hash, params, err := DecodeHash(user.Password)
+	if err != nil {
+		log.Println("ERROR: Hash validation failed", err)
+		return err500, nil
+	}
+
+	if uint32(lambdacontext.MemoryLimitInMB) < 750 * params.Memory {
+		log.Println("ERROR: Not enough memory to compute hash")
+		return err500, nil
+	}
+
+	valid, err := ValidateHash(params, []byte(req.Password), &hash)
 	if err != nil {
 		log.Println("ERROR: Hash validation failed", err)
 		return err500, nil
