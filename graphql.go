@@ -14,35 +14,43 @@ var (
 	getHash     *graphql.Request = graphql.NewRequest(`
 		query ($email: String!) {
 			user(where: {email: {_eq: $email}}) {
-				id
+				uuid
 				password
+				admin
+				slug
+				display
 			}
 		}
 	`)
 )
 
+type User struct {
+	Uuid     string
+	Password string
+	Admin    bool
+	Slug     string
+	Display  string
+}
+
 type getResponse struct {
-	User []struct {
-		Id       string
-		Password string
-	}
+	User []User
 }
 
 func InitGraphQL(url string) {
 	client = graphql.NewClient(url)
 }
 
-func FetchHash(ctx context.Context, email string, token string) (string, string, error) {
+func FetchHash(ctx context.Context, email string, token string) (User, error) {
 	getHash.Var("email", email)
 	getHash.Header.Set("Cookie", fmt.Sprintf("auth=%s", token))
 
 	var res getResponse
 	if err := client.Run(ctx, getHash, &res); err != nil {
-		return "", "", err
+		return User{}, err
 	}
 	if len(res.User) != 1 {
-		return "", "", ErrNotFound
+		return User{}, ErrNotFound
 	}
 
-	return res.User[0].Id, res.User[0].Password, nil
+	return res.User[0], nil
 }

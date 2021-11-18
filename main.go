@@ -49,7 +49,7 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 	}
 
 	ensureToken()
-	id, encoded, err := FetchHash(ctx, req.Email, token)
+	user, err := FetchHash(ctx, req.Email, token)
 	if err != nil {
 		switch err {
 		case ErrNotFound:
@@ -82,18 +82,30 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	userExp := time.Now().Add(exp)
 
-	// TODO: fetch roles instead of giving admin all the time
-	userToken, err := GenJWT(id, []string{"admin"}, userExp)
+	roles := []string{"user"}
+	if user.Admin {
+		roles = append([]string{"admin"}, roles...)
+	}
+
+	userToken, err := GenJWT(user.Uuid, roles, userExp)
 	if err != nil {
 		log.Println("ERROR: JWT creation failed", err)
 		return err500, nil
 	}
 
 	type response struct {
-		Id string `json:"id"`
+		Id      string   `json:"id"`
+		Roles   []string `json:"roles"`
+		Slug    string   `json:"slug"`
+		Display string   `json:"display"`
 	}
 
-	res, _ := json.Marshal(response{id})
+	res, _ := json.Marshal(response{
+		user.Uuid,
+		roles,
+		user.Slug,
+		user.Display,
+	})
 
 	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusOK,
